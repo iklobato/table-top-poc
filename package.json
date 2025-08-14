@@ -1,0 +1,36 @@
+{
+  "name": "table-top",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "prisma generate && next dev",
+    "socket:dev": "node socket-server.js",
+    "dev:all": "concurrently \"npm run socket:dev\" \"npm run dev\"",
+    "build": "prisma generate && next build",
+    "start": "next start",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev --name init",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@prisma/client": "5.18.0",
+    "@socket.io/redis-adapter": "8.2.0",
+    "ioredis": "5.4.1",
+    "next": "14.2.5",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "socket.io": "4.7.5",
+    "socket.io-client": "4.7.5",
+    "zod": "3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "20.14.10",
+    "@types/react": "18.3.3",
+    "@types/react-dom": "18.3.0",
+    "eslint": "8.57.0",
+    "eslint-config-next": "14.2.5",
+    "concurrently": "8.2.2",
+    "prisma": "5.18.0",
+    "typescript": "5.5.4"
+  }
+}

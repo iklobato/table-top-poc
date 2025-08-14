@@ -1,0 +1,171 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Table {
+  id         String    @id @default(cuid())
+  name       String
+  is_active  Boolean   @default(true)
+  created_at DateTime  @default(now())
+  players    Player[]
+  sessions   SessionTable[]
+  answers    Answer[]
+  leaderboards LeaderboardCache[]
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  is_active   Boolean  @default(true)
+  order_index Int      @default(0)
+  players     Player[]
+  variants    QuestionVariant[]
+  answers     Answer[]
+}
+
+model GameSession {
+  id            String   @id @default(cuid())
+  name          String
+  status        SessionStatus @default(DRAFT)
+  total_rounds  Int      @default(5)
+  tables        SessionTable[]
+  players       Player[]
+  questions     Question[]
+  rounds        Round[]
+  leaderboard   LeaderboardCache[]
+  created_at    DateTime @default(now())
+}
+
+enum SessionStatus {
+  DRAFT
+  ACTIVE
+  FINISHED
+}
+
+model SessionTable {
+  id         String   @id @default(cuid())
+  session    GameSession @relation(fields: [session_id], references: [id])
+  session_id String
+  table      Table @relation(fields: [table_id], references: [id])
+  table_id   String
+  is_locked  Boolean @default(false)
+}
+
+model Player {
+  id           String   @id @default(cuid())
+  display_name String?
+  table        Table?   @relation(fields: [table_id], references: [id])
+  table_id     String?
+  session      GameSession? @relation(fields: [session_id], references: [id])
+  session_id   String?
+  role         Role?    @relation(fields: [role_id], references: [id])
+  role_id      String?
+  joined_at    DateTime @default(now())
+  last_seen_at DateTime @updatedAt
+  answers      Answer[]
+}
+
+model Question {
+  id         String   @id @default(cuid())
+  session    GameSession? @relation(fields: [session_id], references: [id])
+  session_id String?
+  topic      String
+  source     QuestionSource @default(MANUAL)
+  status     QuestionStatus @default(DRAFT)
+  variants   QuestionVariant[]
+  rounds     Round[]
+}
+
+enum QuestionSource {
+  MANUAL
+  AI
+}
+
+enum QuestionStatus {
+  DRAFT
+  APPROVED
+}
+
+model QuestionVariant {
+  id         String   @id @default(cuid())
+  question   Question @relation(fields: [question_id], references: [id])
+  question_id String
+  role        Role?   @relation(fields: [role_id], references: [id])
+  role_id     String?
+  prompt      String
+  choice_a    String
+  choice_b    String
+  choice_c    String
+  choice_d    String
+  points_a    Int
+  points_b    Int
+  points_c    Int
+  points_d    Int
+  metadata    Json?
+}
+
+model Round {
+  id           String   @id @default(cuid())
+  session      GameSession @relation(fields: [session_id], references: [id])
+  session_id   String
+  question     Question? @relation(fields: [question_id], references: [id])
+  question_id  String?
+  index        Int
+  status       RoundStatus @default(PENDING)
+  started_at   DateTime?
+  deadline_at  DateTime?
+  finalized_at DateTime?
+  variant_set_id String?
+  answers      Answer[]
+  leaderboards LeaderboardCache[]
+}
+
+enum RoundStatus {
+  PENDING
+  LIVE
+  CLOSED
+}
+
+model Answer {
+  id             String   @id @default(cuid())
+  round          Round    @relation(fields: [round_id], references: [id])
+  round_id       String
+  player         Player   @relation(fields: [player_id], references: [id])
+  player_id      String
+  role           Role?    @relation(fields: [role_id], references: [id])
+  role_id        String?
+  table          Table?   @relation(fields: [table_id], references: [id])
+  table_id       String?
+  choice         Choice
+  points_awarded Int      @default(0)
+  response_ms    Int
+  submitted_at   DateTime @default(now())
+}
+
+enum Choice {
+  A
+  B
+  C
+  D
+}
+
+model LeaderboardCache {
+  id                 String   @id @default(cuid())
+  session            GameSession @relation(fields: [session_id], references: [id])
+  session_id         String
+  round              Round?   @relation(fields: [round_id], references: [id])
+  round_id           String?
+  table              Table    @relation(fields: [table_id], references: [id])
+  table_id           String
+  raw_points         Int      @default(0)
+  normalized_points  Float    @default(0)
+  total_response_ms  Int      @default(0)
+  rank               Int      @default(0)
+
+  @@unique([session_id, round_id, table_id], name: "session_id_round_id_table_id")
+}
