@@ -55,17 +55,23 @@ export default function GamePage() {
   };
 
   return (
-    <main style={{ padding: 24 }}>
-      <h2>Game</h2>
-      <div>Time left: {remaining}s</div>
+    <main className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-2xl font-semibold">Game</h2>
+        <div className="text-lg">Time left: <span className="font-mono">{remaining}s</span></div>
+      </div>
       {variant && (
-        <div style={{ marginTop: 16 }}>
-          <div style={{ fontWeight: 600 }}>{variant.prompt}</div>
-          <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
+        <div className="card p-6 space-y-4">
+          <div className="text-lg font-medium">{variant.prompt}</div>
+          <div className="grid gap-3">
             {variant.choices.map((c: any) => (
-              <button key={c.key} onClick={() => setChoice(c.key)} style={{ background: choice === c.key ? '#def' : undefined }}>{c.key}. {c.text}</button>
+              <button key={c.key} onClick={() => setChoice(c.key)} className={`btn ${choice === c.key ? 'btn-primary' : 'btn-secondary'} justify-start`}>
+                <span className="w-6 inline-block">{c.key}.</span> {c.text}
+              </button>
             ))}
-            <button onClick={submit} disabled={!choice}>Submit</button>
+            <div>
+              <button className="btn btn-primary" onClick={submit} disabled={!choice}>Submit</button>
+            </div>
           </div>
         </div>
       )}

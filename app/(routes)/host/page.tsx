@@ -25,18 +25,23 @@ export default function HostPage() {
   };
 
   return (
-    <main style={{ padding: 24 }}>
-      <h2>Host Console</h2>
-      <input placeholder="Session ID" value={sessionId} onChange={(e) => setSessionId(e.target.value)} />
-      <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-        <button onClick={startRound}>Start Round</button>
-        <button onClick={stopRound}>Stop Round</button>
+    <main className="space-y-6">
+      <h2 className="text-2xl font-semibold">Host Console</h2>
+      <div className="card p-6 grid gap-4">
+        <label className="grid gap-2">
+          <span className="text-sm text-slate-400">Session ID</span>
+          <input className="input" placeholder="Session ID" value={sessionId} onChange={(e) => setSessionId(e.target.value)} />
+        </label>
+        <div className="flex gap-3">
+          <button className="btn btn-primary" onClick={startRound}>Start Round</button>
+          <button className="btn btn-secondary" onClick={stopRound}>Stop Round</button>
+        </div>
       </div>
-      <div style={{ marginTop: 16 }}>
-        <h3>Events</h3>
-        <pre style={{ maxHeight: 300, overflow: 'auto', background: '#111', color: '#0f0', padding: 12 }}>
+      <div className="card p-6">
+        <h3 className="text-lg font-semibold mb-2">Events</h3>
+        <div className="bg-slate-950/70 rounded-lg border border-slate-900 p-3 max-h-80 overflow-auto font-mono text-sm text-green-400">
           {events.map((e, i) => (<div key={i}>{JSON.stringify(e)}</div>))}
-        </pre>
+        </div>
       </div>
     </main>
   );

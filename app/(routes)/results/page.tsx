@@ -15,24 +15,26 @@ export default function ResultsPage() {
   }, [sessionId]);
 
   return (
-    <main style={{ padding: 24 }}>
-      <h2>Leaderboard</h2>
-      <table>
-        <thead>
-          <tr><th>Rank</th><th>Table</th><th>Raw</th><th>Normalized</th><th>Response(ms)</th></tr>
-        </thead>
-        <tbody>
-          {data.entries.map((e: any) => (
-            <tr key={e.table_id}>
-              <td>{e.rank}</td>
-              <td>{e.table?.name || e.table_id}</td>
-              <td>{e.raw_points}</td>
-              <td>{e.normalized_points}</td>
-              <td>{e.total_response_ms}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <main className="space-y-6">
+      <h2 className="text-2xl font-semibold">Leaderboard</h2>
+      <div className="card p-6">
+        <table className="table">
+          <thead>
+            <tr><th>Rank</th><th>Table</th><th>Raw</th><th>Normalized</th><th>Response (ms)</th></tr>
+          </thead>
+          <tbody>
+            {data.entries.map((e: any) => (
+              <tr key={e.table_id}>
+                <td className="font-semibold">{e.rank}</td>
+                <td>{e.table?.name || e.table_id}</td>
+                <td>{e.raw_points}</td>
+                <td>{e.normalized_points}</td>
+                <td>{e.total_response_ms}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </main>
   );
 }
