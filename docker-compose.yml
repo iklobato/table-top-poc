@@ -20,7 +20,7 @@ services:
     volumes:
       - .:/app
       - /app/node_modules
-    command: sh -c "npm i && npx prisma generate && (node socket-server.js &) && npm run dev"
+    command: sh -c "npm i && npx prisma migrate deploy && npx prisma generate && (node socket-server.js &) && npm run dev"
 
   db:
     image: postgres:16-alpine
