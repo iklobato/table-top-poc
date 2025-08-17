@@ -1,8 +1,8 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { io } from "socket.io-client";
 
-export default function Home() {
+export default function PlayPage() {
   const [sessions, setSessions] = useState<any[]>([]);
   const [tables, setTables] = useState<any[]>([]);
   const [roles, setRoles] = useState<any[]>([]);

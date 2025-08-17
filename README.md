@@ -1,173 +1,260 @@
 # Table-Top POC
 
-Real‑time, round‑based game for tables of players with host control, built on Next.js 14 (App Router), Postgres (Prisma), Redis (pub/sub + locks), and Socket.IO.
+A real‑time, round‑based game for tables of players with a single admin dashboard and a single player page.
 
-- Web app (Next.js) serves UI and all HTTP APIs
-- Socket.IO gateway (Node) on port 3001 bridges Redis pub/sub to browser rooms
-- Postgres persists sessions, rounds, questions, answers, leaderboards
-- Redis stores ephemeral state (deadlines, locks) and broadcasts events
+- Next.js 14 (App Router) for UI + HTTP APIs
+- Postgres (Prisma) for durable data
+- Redis for pub/sub events, countdowns, and locks
+- Socket.IO gateway (Node) for live updates (rooms per table and host)
 
-## Architecture
+## Quick start
 
-Services (docker compose):
-- web: Next.js app + launches `socket-server.js`
-  - HTTP: `http://localhost:3000`
-  - WS: `ws://localhost:3001` (Socket.IO)
-- db: Postgres 16
-- redis: Redis 7
+Requirements: Docker Desktop (or Docker Engine)
 
-Core flows:
-- Host starts a round ⇒ backend writes `started_at/deadline` (DB+Redis) and publishes `round_started` to session channel
-- A 1s ticker publishes `countdown_tick` and triggers finalize when deadline hits (single‑instance lock via Redis)
-- Players submit answers once per round; server computes points from the role’s variant mapping and persists
-- Finalize computes leaderboard per table (raw + normalized placeholder) and publishes `round_finalized`
-
-## Data model (Prisma)
-- `Table(id, name, is_active, created_at, answers[], leaderboards[])`
-- `Role(id, name, is_active, order_index, answers[])`
-- `GameSession(id, name, status, total_rounds, tables, players, questions, rounds, leaderboard, created_at)`
-- `SessionTable(id, session_id, table_id, is_locked)`
-- `Player(id, display_name?, table_id?, session_id?, role_id?, joined_at, last_seen_at)`
-- `Question(id, session_id?, topic, source, status, variants[], rounds[])`
-- `QuestionVariant(id, question_id, role_id?, prompt, choice_a/b/c/d, points_a/b/c/d, metadata?)`
-- `Round(id, session_id, question_id?, index, status, started_at?, deadline_at?, finalized_at?, answers[], leaderboards[])`
-- `Answer(id, round_id, player_id, role_id?, table_id?, choice, points_awarded, response_ms, submitted_at)`
-- `LeaderboardCache(id, session_id, round_id?, table_id, raw_points, normalized_points, total_response_ms, rank)`
-
-Indexes/constraints:
-- `LeaderboardCache`: unique `(session_id, round_id, table_id)`
-
-## Redis keys & channels
-- Keys
-  - `session:{id}:round:{n}:status` → `LIVE`/`CLOSED`
-  - `session:{id}:round:{n}:deadline_ts` → unix ms
-  - `lock:round_finalize:{session_id}:{n}` → mutex
-  - `presence:table:{table_id}` → set of active player ids
-- Pub/Sub channels
-  - `events:session:{id}` → host/admin room
-  - `events:table:{table_id}` → player room
-
-## WebSocket events
-Published via Redis and bridged by `socket-server.js` to Socket.IO rooms:
-- `round_started` { roundIndex, roundId, deadlineTs, questionId }
-- `countdown_tick` { roundIndex, remainingMs }
-- `answer_submitted` { roundId, playerId }
-- `round_ended` { roundIndex }
-- `round_finalized` { roundIndex }
-
-Client rooms & presence:
-- Players: `join_table({ tableId, playerId })`, periodic `heartbeat`
-- Host: `join_host({ sessionId })`
-
-## HTTP API (selected)
-- POST `/api/sessions` → { session }
-- GET `/api/sessions` → { sessions }
-- POST `/api/sessions/{id}/start-round` → { round }
-- POST `/api/sessions/{id}/stop-round` → { round }
-- POST `/api/sessions/{id}/finalize-round` → { round }
-- GET `/api/sessions/{id}/state` → { session }
-- POST `/api/questions` → { questionId }
-- POST `/api/answers` → { ok, answer }
-- GET `/api/leaderboard?sessionId=...` → { roundIndex, entries }
-- POST `/api/players` → { player }
-- GET `/api/round-variant?roundId=...&roleId=...` → role/generic variant
-- GET `/api/tables` → { tables }
-- GET `/api/roles` → { roles }
-- GET `/api/meta` → { roundSeconds }
-- GET `/api/_ticker` → starts ticker in‑process (idempotent)
-
-## UI pages (App Router)
-- `/` Home: create session, recent sessions, links to join/host/results
-- `/join`: pick session, table, role → creates player and redirects to `/game`
-- `/game`: listens for round events, loads per‑role variant, submits answer
-- `/host`: join host room, start/stop round, watch live ticks/events
-- `/results`: shows current round leaderboard
-
-## Getting started
-Requirements: Docker Desktop
-
-1) Copy environment file
+1) Copy env
 ```
 cp .env.example .env
 ```
 
-2) Start services
+2) Build and run
 ```
 docker compose up -d --build
 ```
-- Web: `http://localhost:3000`
-- Socket.IO: `ws://localhost:3001`
+- App: http://localhost:3000
+- Admin dashboard: http://localhost:3000/admin
+- Player page (join + play): http://localhost:3000/
+- Socket.IO server: ws://localhost:3001
 
 3) Seed sample tables/roles (optional)
 ```
 curl -s -X POST http://localhost:3000/api/seed | jq .
 ```
 
-4) Quick smoke test (end‑to‑end)
+4) Admin flow (via UI)
+- Go to `/admin`
+- Create a session
+- Add one or more sample questions
+- Start ticker (optional, enables live countdowns)
+- Start round → players at `/` get their role’s variant
+- Finalize round → leaderboard updates instantly
+
+5) Player flow (via UI)
+- Go to `/`
+- Select session, table, and role → Join
+- When round starts: see question and timer, pick one option → Submit
+
+## Run locally without Docker
+
+### Prerequisites
+- Node.js 20.x (LTS)
+- npm 10+
+- PostgreSQL 14+ (or 15/16)
+- Redis 6+
+
+On macOS you can install services via Homebrew:
 ```
-# Create session
-SID=$(curl -s -X POST -H 'Content-Type: application/json' \
-  http://localhost:3000/api/sessions \
-  -d '{"name":"Smoke"}' | python3 -c "import sys, json; print(json.load(sys.stdin)['session']['id'])")
-
-# Add approved generic question
-curl -s -X POST -H 'Content-Type: application/json' http://localhost:3000/api/questions \
-  -d '{"sessionId":"'"$SID"'","topic":"POC","status":"APPROVED","variants":[{"prompt":"2+2?","choiceA":"4","choiceB":"3","choiceC":"5","choiceD":"6","pointsA":5,"pointsB":0,"pointsC":0,"pointsD":0}]}' | jq .
-
-# Start ticker and round
-curl -s http://localhost:3000/api/_ticker | jq .
-RID=$(curl -s -X POST http://localhost:3000/api/sessions/$SID/start-round | python3 -c "import sys, json; print(json.load(sys.stdin)['round']['id'])")
-
-# Create player (table t1, role r1) and submit correct answer
-PID=$(curl -s -X POST -H 'Content-Type: application/json' http://localhost:3000/api/players \
-  -d '{"sessionId":"'"$SID"'","tableId":"t1","roleId":"r1"}' | python3 -c "import sys, json; print(json.load(sys.stdin)['player']['id'])")
-
-curl -s "http://localhost:3000/api/round-variant?roundId=$RID&roleId=r1" | jq .
-
-curl -s -X POST -H 'Content-Type: application/json' http://localhost:3000/api/answers \
-  -d '{"roundId":"'"$RID"'","playerId":"'"$PID"'","tableId":"t1","roleId":"r1","choice":"A"}' | jq .
-
-# Finalize and view leaderboard
-curl -s -X POST http://localhost:3000/api/sessions/$SID/finalize-round | jq .
-curl -s "http://localhost:3000/api/leaderboard?sessionId=$SID" | jq .
+brew install postgresql@16 redis
+brew services start postgresql@16
+brew services start redis
 ```
 
-## Development
-- Logs
-  - Web container: `docker compose logs -f web`
-- DB Migrations
-  - Create/apply: `docker compose exec -T web npx prisma migrate dev --name <name>`
-  - Generate client: `docker compose exec -T web npx prisma generate`
-- Prisma Studio (optional)
-  - `docker compose exec -T web npx prisma studio`
+### 1) Environment
+Copy and adjust `.env` for local services:
+```
+cp .env.example .env
+```
+Recommended local values:
+```
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/table_top?schema=public
+REDIS_URL=redis://localhost:6379/0
+# Optional
+SESSION_MAX_ROUNDS=5
+ROUND_SECONDS=180
+```
+
+### 2) Database
+Create the database if it doesn't exist:
+```
+createdb table_top || true
+```
+Apply Prisma migrations and generate client:
+```
+npm ci
+npx prisma generate
+npx prisma migrate dev --name init
+```
+If migrations already exist and you want to apply exactly those, use:
+```
+npx prisma migrate deploy
+```
+
+### 3) Run the app (two processes)
+Start Next.js dev server:
+```
+npm run dev
+```
+In another terminal, start the Socket.IO gateway:
+```
+node socket-server.js
+```
+- App: http://localhost:3000
+- Admin dashboard: http://localhost:3000/admin
+- Socket.IO server: http://localhost:3001
+
+Tip (macOS/Linux) to run both temporarily in one shell:
+```
+(node socket-server.js &) && npm run dev
+```
+
+### 4) Seed and ticker
+Optionally seed base data (tables, roles):
+```
+curl -s -X POST http://localhost:3000/api/seed | jq .
+```
+Start the in‑process ticker (idempotent):
+```
+curl -s -X POST http://localhost:3000/api/_ticker | jq .
+```
+
+### 5) Simulate locally
+Run an admin script plus two users:
+```
+node scripts/admin_sim.js & sleep 2; node scripts/user1_sim.js & node scripts/user2_sim.js & wait
+```
+If users start too early and `.session.json` isn't ready, rerun the user scripts.
+
+### Production‑like local run
+Build and start Next.js in production mode:
+```
+npm run build
+npm start
+```
+Run the Socket.IO gateway separately:
+```
+node socket-server.js
+```
+Ensure your `.env` points to production‑grade Postgres/Redis.
+
+## How it works (high‑level)
+
+- Admin starts a round. Server picks the next approved question, stamps `started_at` and `deadline_at`, stores to DB and Redis, and publishes `round_started`.
+- A 1s ticker (
+Redis pub/sub + in‑process interval) publishes `countdown_tick` and calls finalize at deadline (with a Redis lock to avoid races).
+- Players submit once per round. Server enforces deadline and computes points from the role’s question variant mapping.
+- Finalize computes per‑table leaderboard (raw points, normalized placeholder), stores cache, and publishes `round_finalized`.
+
+## Folder & file guide
+
+Top‑level
+- `docker-compose.yml`: Defines services (web, db, redis). The web service runs Next.js and the Socket.IO gateway.
+- `Dockerfile`: Builds the Next.js production image.
+- `package.json`: App scripts, dependencies (Next.js, Prisma, ioredis, socket.io, Tailwind, etc.)
+- `.env.example`: Template for environment variables (copy to `.env`).
+- `README.md`: Project documentation (this file).
+
+Next.js app (App Router)
+- `app/layout.tsx`: Root layout and Tailwind global styles injection
+- `app/globals.css`: Tailwind layers and a minimal dark theme
+- `app/page.tsx`: Unified player page (join + play). Handles: join session/table/role, listens to Socket.IO, shows question, submits answer.
+- `app/(routes)/admin/page.tsx`: Single admin dashboard (create session, add sample Qs, start ticker, start/stop/finalize round, view events)
+
+HTTP APIs (all under `app/api/`)
+- `app/api/sessions/route.ts`: GET list sessions; POST create session
+- `app/api/sessions/[id]/start-round/route.ts`: POST start next round
+- `app/api/sessions/[id]/stop-round/route.ts`: POST stop round early
+- `app/api/sessions/[id]/finalize-round/route.ts`: POST finalize current round
+- `app/api/sessions/[id]/state/route.ts`: GET session + rounds
+- `app/api/questions/route.ts`: POST create question + role variants
+- `app/api/players/route.ts`: POST create a player (join)
+- `app/api/answers/route.ts`: POST submit answer (single‑submission enforced)
+- `app/api/leaderboard/route.ts`: GET current round leaderboard
+- `app/api/round-variant/route.ts`: GET role/generic variant for a round
+- `app/api/tables/route.ts`: GET tables
+- `app/api/roles/route.ts`: GET roles
+- `app/api/meta/route.ts`: GET basic config (round seconds)
+- `app/api/_ticker/route.ts`: Starts the in‑process 1s ticker (idempotent)
+
+Socket gateway
+- `app/api/socket/io.ts`: Server instance/adapter bootstrap (used by route placeholder)
+- `app/api/socket/route.ts`: No‑op endpoint (health placeholder)
+- `socket-server.js`: Separate Node Socket.IO server started by the web container; uses Redis adapter. Bridges Redis pub/sub to rooms:
+  - Host room: `host:{sessionId}`
+  - Table rooms: `table:{tableId}`
+  - Subscribes to `events:*` channels and emits:
+    - `round_started`, `countdown_tick`, `round_finalized`, `answer_submitted`
+
+Library code
+- `lib/prisma.ts`: Prisma client singleton
+- `lib/redis.ts`: Redis clients, key builders, and channel helpers
+- `lib/scoring.ts`: Computes per‑table totals and writes leaderboard cache
+- `lib/ticker.ts`: 1s interval publisher of `countdown_tick`; triggers finalize at deadline
+
+Database & Prisma
+- `prisma/schema.prisma`: Models
+  - `Table`, `Role`, `GameSession`, `SessionTable`, `Player`
+  - `Question`, `QuestionVariant`, `Round`, `Answer`, `LeaderboardCache`
+  - Unique: `LeaderboardCache(session_id, round_id, table_id)`
+- `prisma/migrations/*`: SQL migrations (auto‑applied on container boot)
+
+Styling
+- `tailwind.config.ts`, `postcss.config.js`: Tailwind/PostCSS setup
+- `app/globals.css`: Minimal design tokens and utilities
+
+Scripts (Node)
+- `scripts/load_simulator.js`: Creates a session, adds a sample question, starts ticker + round, spawns many players that answer, finalizes and prints leaderboard
+- `scripts/admin_sim.js`: Seeds base data, creates a session, writes `scripts/.session.json`, adds Qs, starts ticker + round, finalizes, prints leaderboard
+- `scripts/user1_sim.js`: Reads `.session.json`, joins table with role `r1`, fetches variant, answers `A`
+- `scripts/user2_sim.js`: Reads `.session.json`, joins table with role `r2`, fetches variant, answers `A`
+
+Example to run the three scripts together:
+```
+# in one shell
+node scripts/admin_sim.js & sleep 2; node scripts/user1_sim.js & node scripts/user2_sim.js & wait
+```
+(If users start too early and `.session.json` is not written yet, rerun the user scripts.)
 
 ## Configuration
-Environment variables (`.env`):
-- `DATABASE_URL` Postgres DSN (default container DSN provided)
-- `REDIS_URL` Redis URL (default `redis://redis:6379/0`)
-- `HOST_CONSOLE_TOKEN` Placeholder for host auth (POC not enforced)
-- `AI_PROVIDER_API_KEY` Reserved for AI question gen (not implemented)
-- `SESSION_MAX_ROUNDS` Default 5
-- `ROUND_SECONDS` Default 180
+Environment variables (see `.env.example`):
+- `DATABASE_URL` → Postgres DSN (compose defaults provided)
+- `REDIS_URL` → Redis URL (default `redis://redis:6379/0` for compose)
+- `HOST_CONSOLE_TOKEN` → Reserved for admin auth (not enforced in POC)
+- `AI_PROVIDER_API_KEY` → Reserved for AI‑assist question generation (not implemented)
+- `SESSION_MAX_ROUNDS` → default 5
+- `ROUND_SECONDS` → default 180
 
-## Design notes & constraints
-- POC intentionally keeps auth minimal; host token not enforced yet
-- Normalized scoring is stored but shown equal to raw for now
-- Ticker runs in‑process in the web container; Redis lock prevents multi‑instance finalize races
-- Socket.IO uses a separate Node server for simplicity (`socket-server.js` + Redis adapter)
+## APIs (selected)
+- Sessions: `POST /api/sessions`, `GET /api/sessions`, `GET /api/sessions/{id}/state`
+- Rounds: `POST /api/sessions/{id}/start-round`, `POST /api/sessions/{id}/stop-round`, `POST /api/sessions/{id}/finalize-round`
+- Questions: `POST /api/questions` (with variants)
+- Players/Answers: `POST /api/players`, `POST /api/answers`
+- Leaderboard: `GET /api/leaderboard?sessionId=...`
+- Variants: `GET /api/round-variant?roundId=...&roleId=...`
 
-## Roadmap / nice‑to‑haves
-- Host auth enforcement with simple token header
-- AI‑assist question generation + approval UI
-- Normalized vs raw leaderboard toggle
-- CSV export of results
-- Presence UI in host console
-- Health checks endpoints + structured logs dashboard
+## Redis keys & channels
+- Keys:
+  - `session:{id}:round:{n}:status` → LIVE/CLOSED
+  - `session:{id}:round:{n}:deadline_ts` → deadline ms
+  - `lock:round_finalize:{session_id}:{n}` → mutex
+  - `presence:table:{table_id}` → set of active player ids
+- Channels:
+  - `events:session:{id}` → host admin events
+  - `events:table:{table_id}` → player room events
+
+## Development notes
+- The web container runs: `npx prisma migrate deploy && npx prisma generate && (node socket-server.js &) && next dev`
+- Logs: `docker compose logs -f web`
+- Migrations: `docker compose exec -T web npx prisma migrate dev --name <name>`
+- Prisma Studio: `docker compose exec -T web npx prisma studio`
+
+## Known gaps (POC scope)
+- Admin auth token validation is not enforced
+- Normalized scoring toggle (currently normalized == raw)
+- Full final leaderboard across multiple rounds (per‑round is implemented; final aggregation is easy to add)
+- CSV export
+- Presence visualization in host UI
+- AI‑assist question generation
 
 ## Troubleshooting
-- Build errors about `DATABASE_URL` during export: routes are marked `force-dynamic` to avoid build‑time DB access
-- Redis connection during build: Redis clients now use lazy connect and only at runtime
-- If socket events aren’t received in browser, ensure the client points to `http://localhost:3001` and the container is exposing `3001`
-
-## License
-MIT (POC)
+- If you see build‑time DB/Redis errors: routes are marked dynamic and clients use lazy connect; ensure `.env` is set and rebuild
+- If Socket.IO events don’t arrive, confirm the client connects to `http://localhost:3001` and port 3001 is exposed
+- If simulator user scripts fail with `.session.json` missing, run `admin_sim.js` first or rerun users after ~2 seconds
