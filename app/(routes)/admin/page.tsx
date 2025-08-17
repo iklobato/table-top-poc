@@ -9,6 +9,7 @@ export default function AdminPage() {
   const [events, setEvents] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [rooms, setRooms] = useState<any>({ tables: [] as any[] });
+  const [customQ, setCustomQ] = useState({ prompt: '', a: '', b: '', c: '', d: '', seconds: 180, tableId: '' });
 
   useEffect(() => {
     const load = async () => {
@@ -63,6 +64,13 @@ export default function AdminPage() {
   const stopRound = async () => { if (sessionId) await fetch(`/api/sessions/${sessionId}/stop-round`, { method: 'POST' }); };
   const finalizeRound = async () => { if (sessionId) await fetch(`/api/sessions/${sessionId}/finalize-round`, { method: 'POST' }); };
 
+  const startCustom = async (target: 'all' | 'one') => {
+    if (!sessionId || !customQ.prompt || !customQ.a || !customQ.b || !customQ.c || !customQ.d) return;
+    const body: any = { prompt: customQ.prompt, choiceA: customQ.a, choiceB: customQ.b, choiceC: customQ.c, choiceD: customQ.d, seconds: Number(customQ.seconds || 180) };
+    if (target === 'one' && customQ.tableId) body.tableId = customQ.tableId;
+    await fetch(`/api/sessions/${sessionId}/start-custom`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  };
+
   return (
     <main className="space-y-6">
       <h2 className="text-2xl font-semibold">Admin Dashboard</h2>
@@ -85,6 +93,26 @@ export default function AdminPage() {
             <button className="btn btn-secondary" onClick={stopRound}>Stop</button>
             <button className="btn btn-secondary" onClick={finalizeRound}>Finalize</button>
           </div>
+        </div>
+      </div>
+      <div className="card p-6 grid gap-4">
+        <h3 className="text-lg font-semibold">Custom question</h3>
+        <div className="grid md:grid-cols-2 gap-3">
+          <input className="input" placeholder="Prompt" value={customQ.prompt} onChange={(e) => setCustomQ({ ...customQ, prompt: e.target.value })} />
+          <input className="input" placeholder="Seconds (e.g. 120)" value={customQ.seconds} onChange={(e) => setCustomQ({ ...customQ, seconds: Number(e.target.value || 0) })} />
+        </div>
+        <div className="grid md:grid-cols-4 gap-3">
+          <input className="input" placeholder="Choice A" value={customQ.a} onChange={(e) => setCustomQ({ ...customQ, a: e.target.value })} />
+          <input className="input" placeholder="Choice B" value={customQ.b} onChange={(e) => setCustomQ({ ...customQ, b: e.target.value })} />
+          <input className="input" placeholder="Choice C" value={customQ.c} onChange={(e) => setCustomQ({ ...customQ, c: e.target.value })} />
+          <input className="input" placeholder="Choice D" value={customQ.d} onChange={(e) => setCustomQ({ ...customQ, d: e.target.value })} />
+        </div>
+        <div className="flex items-end gap-3">
+          <select className="select" value={customQ.tableId} onChange={(e) => setCustomQ({ ...customQ, tableId: e.target.value })}>
+            <option value="">All tables</option>
+            {rooms.tables.map((t: any) => (<option key={t.tableId} value={t.tableId}>{t.tableName}</option>))}
+          </select>
+          <button className="btn btn-primary" onClick={() => startCustom(customQ.tableId ? 'one' : 'all')} disabled={!customQ.prompt || !customQ.a || !customQ.b || !customQ.c || !customQ.d}>Start custom round</button>
         </div>
       </div>
       <div className="card p-6">
