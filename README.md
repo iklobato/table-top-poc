@@ -40,7 +40,7 @@ curl -s -X POST http://localhost:3000/api/seed | jq .
 
 5) Player flow (via UI)
 - Go to `/`
-- Select session, table, and role → Join
+- Provide your name, select session, table, and role → Join
 - When round starts: see question and timer, pick one option → Submit
 
 ## Run locally without Docker
@@ -116,13 +116,6 @@ Start the in‑process ticker (idempotent):
 curl -s -X POST http://localhost:3000/api/_ticker | jq .
 ```
 
-### 5) Simulate locally
-Run an admin script plus two users:
-```
-node scripts/admin_sim.js & sleep 2; node scripts/user1_sim.js & node scripts/user2_sim.js & wait
-```
-If users start too early and `.session.json` isn't ready, rerun the user scripts.
-
 ### Production‑like local run
 Build and start Next.js in production mode:
 ```
@@ -135,13 +128,110 @@ node socket-server.js
 ```
 Ensure your `.env` points to production‑grade Postgres/Redis.
 
-## How it works (high‑level)
+## How the system works
 
-- Admin starts a round. Server picks the next approved question, stamps `started_at` and `deadline_at`, stores to DB and Redis, and publishes `round_started`.
-- A 1s ticker (
-Redis pub/sub + in‑process interval) publishes `countdown_tick` and calls finalize at deadline (with a Redis lock to avoid races).
-- Players submit once per round. Server enforces deadline and computes points from the role’s question variant mapping.
-- Finalize computes per‑table leaderboard (raw points, normalized placeholder), stores cache, and publishes `round_finalized`.
+### Game objects
+- **Session**: A game instance that can contain multiple rounds. Players join a specific session.
+- **Table**: Physical/virtual table grouping players. Leaderboard is per table.
+- **Role**: Player role within a table (e.g., r1, r2…). Roles can have role‑specific question variants.
+- **Question**: Canonical question with multiple choice options `[A..D]`.
+- **QuestionVariant**: Role‑specific mapping of options to points (e.g., A:10, B:5, ...). There is also a generic variant if a role doesn’t have a dedicated one.
+- **Round**: A single play window with start time, deadline, and a chosen question.
+- **Answer**: A player’s single submission for a round.
+- **LeaderboardCache**: Per‑table, per‑round totals (raw and normalized placeholder).
+
+### Round lifecycle
+1) Admin starts a round → server selects a question, creates a `Round`, sets `started_at` and `deadline_at`, stores `deadline_ts` in Redis, publishes `round_started`.
+2) Ticker publishes `countdown_tick` every 1s via Redis pub/sub and Socket.IO.
+3) Players submit once before `deadline_ts`. Server validates: unique submission per player/round, deadline not passed, valid option.
+4) On deadline or on admin action, finalize acquires a Redis lock, aggregates per‑table totals into `LeaderboardCache`, publishes `round_finalized`.
+
+### Real‑time events and rooms
+- **Rooms**
+  - Host room: `host:{sessionId}` (admin dashboard)
+  - Table room: `table:{tableId}` (players at the same table)
+- **Events** (from Redis → Socket.IO → clients)
+  - `round_started` { sessionId, roundId, deadlineTs, questionId }
+  - `countdown_tick` { sessionId, roundId, remainingSeconds }
+  - `answer_submitted` { sessionId, roundId, tableId, playerId }
+  - `round_finalized` { sessionId, roundId }
+
+### Scoring model
+- Each `QuestionVariant` contains a points map for options A..D.
+- On submit, the server looks up the role‑specific variant (or generic fallback) and applies the points.
+- `LeaderboardCache` stores per‑table totals per round. Normalized scoring is reserved (currently equals raw totals).
+
+### Timers & concurrency
+- **Ticker**: An in‑process 1s interval posts `countdown_tick` and checks deadlines.
+- **Finalize lock**: A Redis `SET key value NX PX=30000` mutex prevents double finalization across processes.
+- **Adapter**: Socket.IO uses the Redis adapter so multiple instances can broadcast consistently.
+
+## Using the Admin dashboard (all features)
+Location: `http://localhost:3000/admin`
+
+- **Create session**: Initializes a new game session. Sessions appear in both admin and player UIs.
+- **Rooms overview**: Live presence and participants per table, showing names, roles, and join times.
+- **Add questions**: Create a base question and one or more role‑specific variants with points mapping.
+- **Start ticker**: Enables global countdown ticks (safe to call multiple times). Required for live timers.
+- **Start round**: Picks an approved question and starts a round. Broadcasts `round_started` to host and relevant table rooms.
+- **Start custom round**: Send a custom question (prompt, choices, seconds) to one specific table or to all tables in the session.
+- **Stop round (early)**: Optional endpoint to end the round before the deadline.
+- **Finalize round**: Stops submissions, aggregates scores into the per‑table leaderboard, broadcasts `round_finalized`.
+- **View leaderboard**: Fetch per‑round, per‑table totals via `GET /api/leaderboard?sessionId=...`.
+
+Notes:
+- Multiple rounds per session are supported. Final multi‑round aggregation can be added on top of `LeaderboardCache`.
+- Admin auth token is reserved via `HOST_CONSOLE_TOKEN` but not enforced in this POC.
+
+## Using the Player page (all features)
+Location: `http://localhost:3000/`
+
+- **Join**: Provide your name, pick a session, table, and role, then join.
+- **Wait**: When the admin starts a round, you will receive the question (generic or role‑specific variant) and a live countdown.
+- **Answer**: Pick one option A..D. Only one submission is accepted before the deadline.
+- **Live updates**: Countdown ticks and round finalization appear in real time via WebSockets.
+- **After finalize**: Acknowledge results and wait for the next round.
+
+Rules applied to players:
+- One submission per round per player.
+- Submissions after the deadline are rejected.
+- Answers must be one of A..D.
+
+## HTTP API reference
+
+- Sessions
+  - `GET /api/sessions` → List sessions
+  - `POST /api/sessions` → Create session `{ name, totalRounds?, tableIds? }`
+  - `GET /api/sessions/{id}/state` → Session with rounds summary
+  - `POST /api/sessions/{id}/start-round` → Start next round using approved question
+  - `POST /api/sessions/{id}/stop-round` → Stop current round early
+  - `POST /api/sessions/{id}/finalize-round` → Finalize current live round
+  - `POST /api/sessions/{id}/start-custom` → Start a custom question round (single table or all)
+    - Body: `{ prompt, choiceA..D, pointsA..D?, seconds?, tableId? }`
+
+- Questions
+  - `POST /api/questions` → Create question and variants for session
+  - `GET /api/round-variant?roundId=...&roleId=...` → Get the role‑specific or generic variant for the round
+
+- Players & Answers
+  - `POST /api/players` → Create a player (join) `{ sessionId, tableId, roleId, displayName }`
+  - `POST /api/answers` → Submit an answer `{ roundId, playerId, roleId, tableId, choice }`
+
+- Leaderboard
+  - `GET /api/leaderboard?sessionId=...` → Per‑round leaderboard entries for the latest round
+
+- Catalogs
+  - `GET /api/tables` → List tables
+  - `GET /api/roles` → List roles
+
+- Admin
+  - `GET /api/admin/rooms?sessionId=...` → Rooms overview (participants per table + presence)
+
+- System
+  - `GET /api/meta` → Basic config (roundSeconds)
+  - `POST /api/_ticker` → Start in‑process ticker (idempotent)
+  - `POST /api/seed` → Seed base data (tables, roles)
+  - `GET /api/socket` → Socket placeholder/health
 
 ## Folder & file guide
 
@@ -156,23 +246,10 @@ Next.js app (App Router)
 - `app/layout.tsx`: Root layout and Tailwind global styles injection
 - `app/globals.css`: Tailwind layers and a minimal dark theme
 - `app/page.tsx`: Unified player page (join + play). Handles: join session/table/role, listens to Socket.IO, shows question, submits answer.
-- `app/(routes)/admin/page.tsx`: Single admin dashboard (create session, add sample Qs, start ticker, start/stop/finalize round, view events)
+- `app/(routes)/admin/page.tsx`: Single admin dashboard (create session, add sample Qs, start ticker, start/stop/finalize round, view events, custom rounds)
 
 HTTP APIs (all under `app/api/`)
-- `app/api/sessions/route.ts`: GET list sessions; POST create session
-- `app/api/sessions/[id]/start-round/route.ts`: POST start next round
-- `app/api/sessions/[id]/stop-round/route.ts`: POST stop round early
-- `app/api/sessions/[id]/finalize-round/route.ts`: POST finalize current round
-- `app/api/sessions/[id]/state/route.ts`: GET session + rounds
-- `app/api/questions/route.ts`: POST create question + role variants
-- `app/api/players/route.ts`: POST create a player (join)
-- `app/api/answers/route.ts`: POST submit answer (single‑submission enforced)
-- `app/api/leaderboard/route.ts`: GET current round leaderboard
-- `app/api/round-variant/route.ts`: GET role/generic variant for a round
-- `app/api/tables/route.ts`: GET tables
-- `app/api/roles/route.ts`: GET roles
-- `app/api/meta/route.ts`: GET basic config (round seconds)
-- `app/api/_ticker/route.ts`: Starts the in‑process 1s ticker (idempotent)
+- See HTTP API reference above
 
 Socket gateway
 - `app/api/socket/io.ts`: Server instance/adapter bootstrap (used by route placeholder)
@@ -222,14 +299,6 @@ Environment variables (see `.env.example`):
 - `SESSION_MAX_ROUNDS` → default 5
 - `ROUND_SECONDS` → default 180
 
-## APIs (selected)
-- Sessions: `POST /api/sessions`, `GET /api/sessions`, `GET /api/sessions/{id}/state`
-- Rounds: `POST /api/sessions/{id}/start-round`, `POST /api/sessions/{id}/stop-round`, `POST /api/sessions/{id}/finalize-round`
-- Questions: `POST /api/questions` (with variants)
-- Players/Answers: `POST /api/players`, `POST /api/answers`
-- Leaderboard: `GET /api/leaderboard?sessionId=...`
-- Variants: `GET /api/round-variant?roundId=...&roleId=...`
-
 ## Redis keys & channels
 - Keys:
   - `session:{id}:round:{n}:status` → LIVE/CLOSED
@@ -251,7 +320,7 @@ Environment variables (see `.env.example`):
 - Normalized scoring toggle (currently normalized == raw)
 - Full final leaderboard across multiple rounds (per‑round is implemented; final aggregation is easy to add)
 - CSV export
-- Presence visualization in host UI
+- Presence visualization in host UI (basic presence done; richer UI TBD)
 - AI‑assist question generation
 
 ## Troubleshooting
