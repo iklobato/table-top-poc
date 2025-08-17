@@ -9,6 +9,7 @@ export default function Home() {
   const [sessionId, setSessionId] = useState<string>("");
   const [tableId, setTableId] = useState<string>("");
   const [roleId, setRoleId] = useState<string>("");
+  const [displayName, setDisplayName] = useState<string>("");
   const [playerId, setPlayerId] = useState<string>("");
 
   const [roundId, setRoundId] = useState<string | null>(null);
@@ -64,7 +65,7 @@ export default function Home() {
     const res = await fetch("/api/players", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId, tableId, roleId }),
+      body: JSON.stringify({ sessionId, tableId, roleId, displayName }),
     });
     const data = await res.json();
     setPlayerId(data.player.id);
@@ -80,6 +81,10 @@ export default function Home() {
       <h2 className="text-2xl font-semibold">Play</h2>
       {!playerId && (
         <div className="card p-6 grid gap-4">
+          <label className="grid gap-2">
+            <span className="text-sm text-slate-400">Your name</span>
+            <input className="input" placeholder="e.g. Alex" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+          </label>
           <label className="grid gap-2">
             <span className="text-sm text-slate-400">Session</span>
             <select className="select" value={sessionId} onChange={(e) => setSessionId(e.target.value)}>
@@ -98,7 +103,7 @@ export default function Home() {
               {roles.map(r => (<option key={r.id} value={r.id}>{r.name}</option>))}
             </select>
           </label>
-          <button className="btn btn-primary" onClick={join}>Join</button>
+          <button className="btn btn-primary" onClick={join} disabled={!displayName.trim() || !sessionId || !tableId || !roleId}>Join</button>
         </div>
       )}
 

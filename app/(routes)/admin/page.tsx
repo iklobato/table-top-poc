@@ -8,6 +8,7 @@ export default function AdminPage() {
   const [newName, setNewName] = useState("");
   const [events, setEvents] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [rooms, setRooms] = useState<any>({ tables: [] as any[] });
 
   useEffect(() => {
     const load = async () => {
@@ -27,7 +28,16 @@ export default function AdminPage() {
     s.on("round_started", (p: any) => setEvents((e) => [{ type: 'round_started', p }, ...e]));
     s.on("round_finalized", (p: any) => setEvents((e) => [{ type: 'round_finalized', p }, ...e]));
     s.on("countdown_tick", (p: any) => setEvents((e) => [{ type: 'tick', p }, ...e].slice(0, 100)));
-    return () => { s.disconnect(); };
+    const poll = async () => {
+      if (!sessionId) return;
+      try {
+        const res = await fetch(`/api/admin/rooms?sessionId=${sessionId}`);
+        if (res.ok) setRooms(await res.json());
+      } catch {}
+    };
+    const iv = setInterval(poll, 2000);
+    poll();
+    return () => { clearInterval(iv); s.disconnect(); };
   }, [sessionId]);
 
   const createSession = async () => {
@@ -75,6 +85,31 @@ export default function AdminPage() {
             <button className="btn btn-secondary" onClick={stopRound}>Stop</button>
             <button className="btn btn-secondary" onClick={finalizeRound}>Finalize</button>
           </div>
+        </div>
+      </div>
+      <div className="card p-6">
+        <h3 className="text-lg font-semibold mb-2">Rooms overview</h3>
+        <div className="grid md:grid-cols-2 gap-4">
+          {rooms?.tables?.map((t: any) => (
+            <div key={t.tableId} className="p-3 rounded-lg border border-slate-900 bg-slate-950/60">
+              <div className="flex items-center justify-between mb-2">
+                <div className="font-medium">{t.tableName}</div>
+                <div className="text-xs text-slate-400">{t.presentCount}/{t.players.length} present</div>
+              </div>
+              <div className="space-y-1">
+                {t.players.map((p: any) => (
+                  <div key={p.id} className="flex items-center justify-between text-sm">
+                    <div className="truncate">
+                      <span className="text-slate-300">{p.display_name || 'Anonymous'}</span>
+                      <span className="text-slate-500"> · {p.role?.name || 'role?'}</span>
+                    </div>
+                    <span className="text-xs text-slate-500">joined {new Date(p.joined_at).toLocaleTimeString()}</span>
+                  </div>
+                ))}
+                {!t.players.length && (<div className="text-sm text-slate-500">No participants yet</div>)}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
       <div className="card p-6">
